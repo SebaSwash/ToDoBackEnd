@@ -3,8 +3,6 @@ import humps
 import datetime
 from django.db import connection
 from django.http import HttpResponse, JsonResponse
-from django.forms.models import model_to_dict
-from django.utils.timezone import make_aware
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -35,6 +33,9 @@ def multiple_tasks_router(request, *args, **kwargs):
 def single_tasks_router(request, *args, **kwargs):
     if request.method == 'PUT':
         return update_user_task(request, *args, **kwargs)
+    
+    if request.method == 'DELETE':
+        return delete_user_task(request, *args, **kwargs)
     
 
 # Método para obtener la lista de tareas asociadas a un usuairo en particular
@@ -159,4 +160,52 @@ def update_user_task(request, *args, **kwargs):
         print(error)
         return JsonResponse({
             'message': 'Se ha producido un error interno al actualizar la tarea.'
+        }, status=500)
+
+@require_http_methods(['DELETE'])
+@access_token_validation
+def delete_user_task(request, *args, **kwargs):
+    try:
+        user_id = kwargs['user_id']
+        task_id = kwargs['task_id']
+
+        # Se verifica que la tarea esté asociada al usuario
+        with connection.cursor() as cursor:
+            sql_query = '''
+                SELECT COUNT(*) AS user_task_count
+                    FROM Task, UserTask
+                        WHERE Task.id = UserTask.task_id
+                        AND UserTask.user_id = %s
+                        AND UserTask.task_id = %s
+            '''
+            cursor.execute(sql_query, [user_id, task_id])
+            data = cursor_to_dict(cursor)
+            
+            task_count = data[0]['user_task_count']
+
+            if task_count == 0:
+                return JsonResponse({
+                    'message': 'Tarea o asociación no encontrada.'
+                }, status=404)
+
+
+            # El usuario si está asociado a la tarea especificada.
+            # Se elimina la tarea y sus posibles asociaciones
+            task = Task.objects.get(id=task_id)
+            task.delete()
+
+            sql_query = '''
+                DELETE FROM UserTask
+                    WHERE task_id = %s
+            '''
+            cursor.execute(sql_query, [task_id])
+
+        return JsonResponse({
+            'message': 'La tarea ha sido eliminada correctamente.'
+        }, status=200)
+
+    except Exception as error:
+        print(error)
+        return JsonResponse({
+            'message': 'Se ha producido un error interno al eliminar la tarea.'
         }, status=500)
